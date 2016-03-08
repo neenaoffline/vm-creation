@@ -1,0 +1,69 @@
+- hosts: newservers
+  vars:
+  - logwatch_email: neenaoffline@gmail.com
+    # crypted passwords, generated on a Linux box using: 
+    # perl -e 'print crypt("password","\$6\$saltsalt\$") . "\n"'
+  - root_password: "{{ lookup('file', './plaintext.passwd.txt') }}"
+  - deploy_password: "{{ lookup('file', './plaintext.passwd.txt') }}"
+
+
+  tasks:
+  - name: Change root password
+    action: user name=root password={{ root_password |password_hash('sha512') }}
+
+  - name: Update APT package cache
+    action: apt update_cache=yes
+
+  - name: Install aptitude
+    action: apt pkg=aptitude state=installed
+
+  - name: Upgrade APT to the latest packages
+    action: apt upgrade=safe
+
+  - name: Install sudo
+    action: apt pkg=sudo state=installed
+
+  - name: Install mosh
+    action: apt pkg=mosh state=installed
+
+  - name: Install vim
+    action: apt pkg=vim state=installed
+
+  - name: Install fail2ban
+    action: apt pkg=fail2ban state=installed
+
+  - name: Add deployment user
+    action: user name=deploy password={{ deploy_password |password_hash('sha512') }}
+
+  - name: Add authorized deploy key
+    action: authorized_key user=deploy key="{{ lookup('file', '/Users/neena/.ssh/id_rsa.pub') }}"
+
+  - name: Remove sudo group rights
+    action: lineinfile dest=/etc/sudoers regexp="^%sudo" state=absent
+
+  - name: Add deploy user to sudoers
+    action: lineinfile dest=/etc/sudoers regexp="deploy ALL" line="deploy ALL=(ALL) ALL" state=present
+
+  - name: Disallow password authentication
+    action: lineinfile dest=/etc/ssh/sshd_config regexp="^PasswordAuthentication" line="PasswordAuthentication no" state=present
+    notify: Restart ssh
+
+  - name: Copy debconf selections so that Postfix can configure itself non-interactively
+    copy: src=postfix_selections  dest=/tmp/postfix_selections
+
+  - name: Set up Postfix to relay mail
+    action: command debconf-set-selections /tmp/postfix_selections
+
+  - name: Install logwatch
+    action: apt pkg=logwatch state=installed
+
+  - name: Make logwatch mail $logwatch_email daily
+    action: lineinfile dest=/etc/cron.daily/00logwatch regexp="^/usr/sbin/logwatch" line="/usr/sbin/logwatch --output mail --mailto $logwatch_email --detail high" state=present create=yes
+
+  - name: Disallow root SSH access
+    action: lineinfile dest=/etc/ssh/sshd_config regexp="^PermitRootLogin" line="PermitRootLogin no" state=present
+    notify: Restart ssh
+
+  handlers:
+  - name: Restart ssh
+    action: service name=ssh state=restarted
